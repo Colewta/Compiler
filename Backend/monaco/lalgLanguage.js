@@ -10,7 +10,7 @@ export function registerLalgLanguage(monaco) {
     tokenPostfix: '.lalg',
 
     keywords: [
-      'program', 'procedure', 'begin', 'end', 'write', 'read', 'var',
+      'program', 'procedure', 'begin', 'end', 'write', 'writeln', 'read', 'readln', 'var',
       'return', 'do', 'while', 'if', 'then', 'else', 'true', 'false',
     ],
 
@@ -20,7 +20,7 @@ export function registerLalgLanguage(monaco) {
 
     operators: [
       ':=', '==', '>=', '<=', '<>', '!=', '++', '--', '||', '&&',
-      '+', '-', '/', '=', '<', '>', '*', '!', 'and', 'or', 'not',
+      '+', '-', '/', '=', '<', '>', '*', '!', 'and', 'or', 'not', 'div',
     ],
 
     tokenizer: {

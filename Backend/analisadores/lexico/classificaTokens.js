@@ -5,7 +5,9 @@
     'begin': 'PALAVRA_RESERVADA',
     'end': 'PALAVRA_RESERVADA',
     'write': 'PALAVRA_RESERVADA',
+    'writeln': 'PALAVRA_RESERVADA',
     'read': 'PALAVRA_RESERVADA',
+    'readln': 'PALAVRA_RESERVADA',
     'var': 'PALAVRA_RESERVADA',
     'true': 'PALAVRA_RESERVADA',
     'false': 'PALAVRA_RESERVADA',
@@ -32,6 +34,7 @@
     '-': 'OPERADOR_MATEMATICO',
     '/': 'OPERADOR_MATEMATICO',
     '*': 'OPERADOR_MATEMATICO',
+    'div': 'OPERADOR_MATEMATICO',
     '++': 'OPERADOR_MATEMATICO',
     '--': 'OPERADOR_MATEMATICO',
 

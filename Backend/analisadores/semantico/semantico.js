@@ -3,6 +3,7 @@ const TIPOS = Object.freeze({
     REAL: 'real',
     STRING: 'string',
     BOOLEANO: 'boolean',
+    PROGRAMA: 'program',
     PROCEDIMENTO: 'procedure',
     ERRO: '<erro>',
     DESCONHECIDO: '<desconhecido>'
@@ -16,6 +17,7 @@ const TIPOS_NORMALIZADOS = Object.freeze({
     str: TIPOS.STRING,
     string: TIPOS.STRING,
     boolean: TIPOS.BOOLEANO,
+    program: TIPOS.PROGRAMA,
     procedure: TIPOS.PROCEDIMENTO
 });
 
@@ -34,6 +36,7 @@ function tipoLegivel(tipo) {
         [TIPOS.REAL]: 'real',
         [TIPOS.STRING]: 'string',
         [TIPOS.BOOLEANO]: 'boolean',
+        [TIPOS.PROGRAMA]: 'program',
         [TIPOS.PROCEDIMENTO]: 'procedure',
         [TIPOS.ERRO]: 'inválido',
         [TIPOS.DESCONHECIDO]: 'desconhecido'
@@ -182,7 +185,7 @@ class AvaliadorExpressao {
     expressaoMultiplicativa() {
         let tipo = this.expressaoUnaria();
 
-        while (this.verificarValor('*', '/')) {
+        while (this.verificarValor('*', '/', 'div')) {
             const operador = this.avancar();
             const direito = this.expressaoUnaria();
             tipo = this.operacaoAritmetica(tipo, direito, operador);
@@ -359,13 +362,19 @@ class AvaliadorExpressao {
             return TIPOS.ERRO;
         }
 
-        if (
-            operador?.valor === '/' ||
-            esquerdo === TIPOS.REAL ||
-            direito === TIPOS.REAL
-        ) {
-            return TIPOS.REAL;
+        if (operador?.valor === '/' || operador?.valor === 'div') {
+            if (esquerdo !== TIPOS.INTEIRO || direito !== TIPOS.INTEIRO) {
+                this.analisador.adicionarErro(
+                    'DIVISAO_TIPOS_INVALIDOS',
+                    operador?.linha,
+                    `A divisão inteira "${operador?.valor}" exige dois operandos integer, mas recebeu ${tipoLegivel(esquerdo)} e ${tipoLegivel(direito)}.`
+                );
+                return TIPOS.ERRO;
+            }
+            return TIPOS.INTEIRO;
         }
+
+        if (esquerdo === TIPOS.REAL || direito === TIPOS.REAL) return TIPOS.REAL;
 
         return TIPOS.INTEIRO;
     }
@@ -399,7 +408,7 @@ export class AnalisadorSemantico {
         this.entrada = entrada;
         this.tabela = extrairTabela(entrada);
         this.opcoes = {
-            exigirInicializacao: true,
+            exigirInicializacao: false,
             analisarComErrosSintaticos: false,
             ...opcoes
         };
@@ -408,6 +417,7 @@ export class AnalisadorSemantico {
         this.chavesErros = new Set();
         this.simbolos = new Map();
         this.inicializados = new Map();
+        this.utilizados = new Set();
         this.errosSintaticos = extrairErrosSintaticos(entrada, this.tabela);
     }
 
@@ -475,6 +485,17 @@ export class AnalisadorSemantico {
         const procedimentos = Array.isArray(this.tabela?.procedimentos)
             ? this.tabela.procedimentos
             : [];
+
+        if (this.tabela?.programa?.nome) {
+            this.registrarSimbolo({
+                nome: this.tabela.programa.nome,
+                tipo: TIPOS.PROGRAMA,
+                categoria: 'programa',
+                escopo: 'global',
+                linha: this.tabela.programa.linha,
+                inicializado: true
+            });
+        }
 
         for (const declaracao of declaracoes) {
             this.registrarSimbolo(declaracao);
@@ -561,7 +582,7 @@ export class AnalisadorSemantico {
             return TIPOS.ERRO;
         }
 
-        if (!this.estaInicializado(simbolo, escopo)) {
+        if (this.opcoes.exigirInicializacao && !this.estaInicializado(simbolo, escopo)) {
             this.adicionarErro(
                 'USO_ANTES_DA_INICIALIZACAO',
                 linha,
@@ -767,12 +788,23 @@ export class AnalisadorSemantico {
     }
 
     analisarWrite(comando, escopo) {
+        const tipos = [];
         for (const argumento of comando.argumentos ?? []) {
-            this.avaliarExpressao(argumento, escopo, 'write');
+            const tipo = this.avaliarExpressao(argumento, escopo, 'write');
+            if (tipo !== TIPOS.ERRO) tipos.push(tipo);
+        }
+
+        if (new Set(tipos).size > 1) {
+            this.adicionarErro(
+                'TIPOS_DIFERENTES_NA_SAIDA',
+                comando.linha,
+                'Todas as variáveis ou expressões de um mesmo comando de saída devem possuir o mesmo tipo.'
+            );
         }
     }
 
     analisarRead(comando, escopo) {
+        const tipos = [];
         for (const identificador of comando.identificadores ?? []) {
             const simbolo = this.resolverSimbolo(identificador.nome, escopo);
 
@@ -796,7 +828,16 @@ export class AnalisadorSemantico {
                 continue;
             }
 
+            tipos.push(simbolo.tipo);
             this.marcarInicializado(simbolo, escopo);
+        }
+
+        if (new Set(tipos).size > 1) {
+            this.adicionarErro(
+                'TIPOS_DIFERENTES_NA_ENTRADA',
+                comando.linha,
+                'Todas as variáveis de um mesmo comando de entrada devem possuir o mesmo tipo.'
+            );
         }
     }
 
@@ -859,13 +900,31 @@ export class AnalisadorSemantico {
         }
     }
 
+    verificarVariaveisNaoUtilizadas() {
+        for (const uso of this.tabela?.usos ?? []) {
+            const simbolo = this.resolverSimbolo(uso.nome, uso.escopo ?? 'global');
+            if (simbolo) this.utilizados.add(simbolo.chave);
+        }
+
+        for (const simbolo of this.simbolos.values()) {
+            if (simbolo.categoria !== 'variavel' || this.utilizados.has(simbolo.chave)) continue;
+            this.adicionarErro(
+                'VARIAVEL_NAO_UTILIZADA',
+                simbolo.linha,
+                `A variável "${simbolo.nome}" foi declarada, mas nunca foi utilizada.`,
+                { nome: simbolo.nome, escopo: simbolo.escopo }
+            );
+        }
+    }
+
     tabelaSimbolosResultado() {
         return Object.fromEntries(
             [...this.simbolos.entries()].map(([chave, simbolo]) => [
                 chave,
                 {
                     ...simbolo,
-                    inicializado: Boolean(this.inicializados.get(chave))
+                    inicializado: Boolean(this.inicializados.get(chave)),
+                    utilizada: simbolo.categoria === 'programa' || this.utilizados.has(chave)
                 }
             ])
         );
@@ -906,6 +965,7 @@ export class AnalisadorSemantico {
         this.analisarInicializacoes();
         this.analisarComandos();
         this.verificarVariaveisNaoInicializadas();
+        this.verificarVariaveisNaoUtilizadas();
         return this.resultado(true);
     }
 }

@@ -12,6 +12,7 @@ export class Parser {
             declaracoes: [],
             procedimentos: [],
             comandos: [],
+            fluxo: [],
             usos: [],
             erros: this.errosSintaticos
         };
@@ -21,6 +22,7 @@ export class Parser {
             declaracoes: [],
             procedimentos: [],
             comandos: [],
+            fluxo: [],
             erros: this.errosSintaticos
         };
     }
@@ -243,7 +245,7 @@ export class Parser {
         const token = this.atual();
         if (token.tipo === 'IDENTIFICADOR') return true;
         if (token.tipo === 'PALAVRA_RESERVADA') {
-            return ['begin', 'write', 'read'].includes(token.valor);
+            return ['begin', 'write', 'writeln', 'read', 'readln'].includes(token.valor);
         }
         if (token.tipo === 'CONTROLE_FLUXO') {
             return ['if', 'while'].includes(token.valor);
@@ -390,7 +392,8 @@ export class Parser {
                 linha: nomeToken.linha,
                 parametros: [],
                 declaracoes: [],
-                comandos: []
+                comandos: [],
+                fluxo: []
             };
 
             this.tabelaSintatica.procedimentos.push(procedimento);
@@ -404,7 +407,7 @@ export class Parser {
             }
 
             this.consumir('PONTO_E_VIRGULA', null, ['var', 'TIPO_DADO', 'procedure', 'begin']);
-            this.bloco();
+            procedimento.fluxo = this.bloco();
             procedimento.declaracoes = this.tabelaSintatica.declaracoes.filter((declaracao) => declaracao.escopo === this.escopoAtual());
             procedimento.comandos = this.tabelaSintatica.comandos.filter((comando) => comando.escopo === this.escopoAtual());
             this.sairEscopo();
@@ -441,25 +444,38 @@ export class Parser {
     bloco() {
         this.declaracoesVariaveis();
         this.declaracoesProcedimentos();
-        this.comandoComposto();
+        return this.comandoComposto();
     }
 
     corpo() {
-        this.bloco();
+        const fluxo = this.bloco();
+        this.tabelaSintatica.fluxo = fluxo;
+        this.arvoreSintatica.fluxo = fluxo;
+        return fluxo;
     }
 
     comandoComposto() {
-        this.consumir('PALAVRA_RESERVADA', 'begin', ['IDENTIFICADOR', 'if', 'while', 'write', 'read', 'end']);
-        this.listaComandos(['end']);
+        const linha = this.atual().linha;
+        this.consumir('PALAVRA_RESERVADA', 'begin', ['IDENTIFICADOR', 'if', 'while', 'write', 'writeln', 'read', 'readln', 'end']);
+        const comandos = this.listaComandos(['end']);
         this.consumir('PALAVRA_RESERVADA', 'end', ['PONTO_E_VIRGULA', 'PONTO_FINAL', 'else']);
+        return {
+            tipo: 'bloco',
+            linha,
+            escopo: this.escopoAtual(),
+            comandos
+        };
     }
 
     listaComandos(terminadores) {
+        const comandos = [];
+
         while (!this.fim() && !this.terminadorComando(terminadores)) {
             if (this.combinar('PONTO_E_VIRGULA')) continue;
 
-            const iniciouComando = this.comando(terminadores);
-            if (!iniciouComando) continue;
+            const comando = this.comando(terminadores);
+            if (!comando) continue;
+            comandos.push(comando);
 
             if (this.combinar('PONTO_E_VIRGULA')) {
                 while (this.combinar('PONTO_E_VIRGULA')) {}
@@ -468,41 +484,37 @@ export class Parser {
 
             if (!this.fim() && !this.terminadorComando(terminadores)) {
                 this.erroAtual('PONTO_E_VIRGULA');
-                this.sincronizar(['PONTO_E_VIRGULA', 'begin', 'if', 'while', 'write', 'read', 'else', 'end']);
+                this.sincronizar(['PONTO_E_VIRGULA', 'begin', 'if', 'while', 'write', 'writeln', 'read', 'readln', 'else', 'end']);
                 this.combinar('PONTO_E_VIRGULA');
             }
         }
+
+        return comandos;
     }
 
     comando(terminadores = ['end']) {
         if (this.verificar('PALAVRA_RESERVADA', 'begin')) {
-            this.comandoComposto();
-            return true;
+            return this.comandoComposto();
         }
 
         if (this.verificar('IDENTIFICADOR')) {
-            this.atribuicaoOuChamada();
-            return true;
+            return this.atribuicaoOuChamada();
         }
 
         if (this.verificar('CONTROLE_FLUXO', 'if')) {
-            this.comandoIf();
-            return true;
+            return this.comandoIf();
         }
 
         if (this.verificar('CONTROLE_FLUXO', 'while')) {
-            this.comandoWhile();
-            return true;
+            return this.comandoWhile();
         }
 
-        if (this.verificar('PALAVRA_RESERVADA', 'write')) {
-            this.comandoWrite();
-            return true;
+        if (this.verificar('PALAVRA_RESERVADA', 'write') || this.verificar('PALAVRA_RESERVADA', 'writeln')) {
+            return this.comandoWrite();
         }
 
-        if (this.verificar('PALAVRA_RESERVADA', 'read')) {
-            this.comandoRead();
-            return true;
+        if (this.verificar('PALAVRA_RESERVADA', 'read') || this.verificar('PALAVRA_RESERVADA', 'readln')) {
+            return this.comandoRead();
         }
 
         if (this.verificar('PALAVRA_RESERVADA', 'return')) {
@@ -511,7 +523,7 @@ export class Parser {
             if (!this.verificar('PONTO_E_VIRGULA') && !this.terminadorComando(terminadores)) {
                 this.expressao(['PONTO_E_VIRGULA', 'end', 'else']);
             }
-            return true;
+            return { tipo: 'invalido', linha: this.anterior().linha };
         }
 
         if (this.terminadorComando(terminadores) || this.verificar('PALAVRA_RESERVADA', 'end')) {
@@ -529,33 +541,32 @@ export class Parser {
 
         if (this.combinar('OPERADOR_ATRIBUICAO')) {
             const inicioExpressao = this.ptr;
-            this.expressao(['PONTO_E_VIRGULA', 'begin', 'if', 'while', 'write', 'read', 'end', 'else']);
+            this.expressao(['PONTO_E_VIRGULA', 'begin', 'if', 'while', 'write', 'writeln', 'read', 'readln', 'end', 'else']);
             const expressao = this.criarExpressao(inicioExpressao, this.ptr, 'atribuicao');
             this.registrarUso(identificador, 'atribuicao');
-            this.registrarComando({
+            return this.registrarComando({
                 tipo: 'atribuicao',
                 alvo: identificador.valor,
                 linha: identificador.linha,
                 expressao
             });
-            return;
         }
 
         if (this.combinar('ABRE_PARENTESIS')) {
             const argumentos = this.argumentosChamada();
             this.consumir('FECHA_PARENTESIS', null, ['PONTO_E_VIRGULA', 'end', 'else']);
             this.registrarUso(identificador, 'chamada');
-            this.registrarComando({
+            return this.registrarComando({
                 tipo: 'chamada',
                 nome: identificador.valor,
                 linha: identificador.linha,
                 argumentos
             });
-            return;
         }
 
         this.erroAtual('OPERADOR_ATRIBUICAO ou ABRE_PARENTESIS');
         this.sincronizar(['PONTO_E_VIRGULA', 'end', 'else']);
+        return null;
     }
 
     argumentosChamada() {
@@ -576,38 +587,45 @@ export class Parser {
         const linha = this.atual().linha;
         this.consumir('CONTROLE_FLUXO', 'if');
         const condicao = this.condicao(['then']);
-        this.registrarComando({
+        const comando = this.registrarComando({
             tipo: 'if',
             linha,
-            condicao
+            condicao,
+            entao: null,
+            senao: null
         });
 
-        if (!this.consumir('CONTROLE_FLUXO', 'then', ['begin', 'if', 'while', 'write', 'read', 'IDENTIFICADOR', 'else', 'end'])) {
-            if (this.verificar('CONTROLE_FLUXO', 'else') || this.verificar('PALAVRA_RESERVADA', 'end')) return;
+        if (!this.consumir('CONTROLE_FLUXO', 'then', ['begin', 'if', 'while', 'write', 'writeln', 'read', 'readln', 'IDENTIFICADOR', 'else', 'end'])) {
+            if (this.verificar('CONTROLE_FLUXO', 'else') || this.verificar('PALAVRA_RESERVADA', 'end')) return comando;
         }
 
-        if (this.inicioComando()) this.comando(['else', 'end']);
+        if (this.inicioComando()) comando.entao = this.comando(['else', 'end']);
         else this.erroAtual('comando apos then');
 
         if (this.combinar('CONTROLE_FLUXO', 'else')) {
-            if (this.inicioComando()) this.comando(['end']);
+            if (this.inicioComando()) comando.senao = this.comando(['end']);
             else this.erroAtual('comando apos else');
         }
+
+        return comando;
     }
 
     comandoWhile() {
         const linha = this.atual().linha;
         this.consumir('CONTROLE_FLUXO', 'while');
         const condicao = this.condicao(['do']);
-        this.registrarComando({
+        const comando = this.registrarComando({
             tipo: 'while',
             linha,
-            condicao
+            condicao,
+            corpo: null
         });
-        this.consumir('CONTROLE_FLUXO', 'do', ['begin', 'if', 'while', 'write', 'read', 'IDENTIFICADOR', 'end']);
+        this.consumir('CONTROLE_FLUXO', 'do', ['begin', 'if', 'while', 'write', 'writeln', 'read', 'readln', 'IDENTIFICADOR', 'end']);
 
-        if (this.inicioComando()) this.comando(['end']);
+        if (this.inicioComando()) comando.corpo = this.comando(['end']);
         else this.erroAtual('comando apos do');
+
+        return comando;
     }
 
     condicao(delimitadores) {
@@ -626,30 +644,41 @@ export class Parser {
 
     comandoWrite() {
         const linha = this.atual().linha;
-        const argumentos = [];
-        this.consumir('PALAVRA_RESERVADA', 'write');
-        this.consumir('ABRE_PARENTESIS', null, ['IDENTIFICADOR', 'NUMERO', 'STRING', 'true', 'false', 'FECHA_PARENTESIS']);
+        let identificadores = [];
+        const palavraSaida = this.atual().valor;
+        this.consumir('PALAVRA_RESERVADA', palavraSaida);
+        this.consumir('ABRE_PARENTESIS', null, ['IDENTIFICADOR', 'FECHA_PARENTESIS']);
 
         if (!this.verificar('FECHA_PARENTESIS')) {
-            do {
-                const inicioExpressao = this.ptr;
-                this.expressao(['VIRGULA', 'FECHA_PARENTESIS']);
-                argumentos.push(this.criarExpressao(inicioExpressao, this.ptr, 'write'));
-            } while (this.combinar('VIRGULA'));
+            identificadores = this.listaIdentificadores();
+        } else {
+            this.erroAtual('IDENTIFICADOR');
         }
 
+        const argumentos = identificadores.map((identificador) => {
+            this.registrarUso(identificador, 'write');
+            const token = this.tokenParaEntrada(identificador);
+            return {
+                texto: identificador.valor,
+                tokens: [token],
+                referencias: [{ nome: identificador.valor, linha: identificador.linha }]
+            };
+        });
+
         this.consumir('FECHA_PARENTESIS', null, ['PONTO_E_VIRGULA', 'end', 'else']);
-        this.registrarComando({
+        return this.registrarComando({
             tipo: 'write',
             linha,
-            argumentos
+            argumentos,
+            quebraLinha: palavraSaida === 'writeln'
         });
     }
 
     comandoRead() {
         const linha = this.atual().linha;
         let identificadores = [];
-        this.consumir('PALAVRA_RESERVADA', 'read');
+        const palavraEntrada = this.atual().valor;
+        this.consumir('PALAVRA_RESERVADA', palavraEntrada);
         this.consumir('ABRE_PARENTESIS', null, ['IDENTIFICADOR', 'FECHA_PARENTESIS']);
 
         if (!this.verificar('FECHA_PARENTESIS')) {
@@ -658,9 +687,10 @@ export class Parser {
         }
 
         this.consumir('FECHA_PARENTESIS', null, ['PONTO_E_VIRGULA', 'end', 'else']);
-        this.registrarComando({
+        return this.registrarComando({
             tipo: 'read',
             linha,
+            palavra: palavraEntrada,
             identificadores: identificadores.map((identificador) => ({
                 nome: identificador.valor,
                 linha: identificador.linha
@@ -729,7 +759,11 @@ export class Parser {
 
     expressaoMultiplicativa(delimitadores) {
         let valido = this.expressaoUnaria(delimitadores);
-        while (this.verificar('OPERADOR_MATEMATICO', '*') || this.verificar('OPERADOR_MATEMATICO', '/')) {
+        while (
+            this.verificar('OPERADOR_MATEMATICO', '*') ||
+            this.verificar('OPERADOR_MATEMATICO', '/') ||
+            this.verificar('OPERADOR_MATEMATICO', 'div')
+        ) {
             this.atualizarPonteiro();
             valido = this.expressaoUnaria(delimitadores) && valido;
         }

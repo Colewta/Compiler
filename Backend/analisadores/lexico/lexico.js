@@ -1,5 +1,6 @@
 import { semantico } from "../semantico/semantico.js";
 import { Parser } from "../sintatico/sintatico.js";
+import { gerarCodigoIntermediario } from "../../geradores/intermediario/geradorIntermediario.js";
 import { classificaTokens } from "./classificaTokens.js";
 
 export class Lexico {
@@ -236,12 +237,11 @@ export class Lexico {
         const resultadoSemantico = semantico(resultadoSintatico);
         const errosSintaticos = resultadoSintatico.errosSintaticos ?? [];
         const errosSemanticos = resultadoSemantico.errosSemanticos ?? [];
-        const sucesso = this.errosLexicos.length === 0 &&
+        const etapasAnterioresValidas = this.errosLexicos.length === 0 &&
             errosSintaticos.length === 0 &&
             errosSemanticos.length === 0;
-
-        return {
-            sucesso,
+        const analise = {
+            sucesso: etapasAnterioresValidas,
             tokens: [...this.tokens],
             errosLexicos: [...this.errosLexicos],
             errosSintaticos,
@@ -251,6 +251,35 @@ export class Lexico {
             tabelaTipos: resultadoSintatico.tabelaTipos,
             tabelaSimbolos: resultadoSemantico.tabelaSimbolos,
             arvoreSintatica: resultadoSintatico.arvoreSintatica
+        };
+
+        const resultadoGeracao = etapasAnterioresValidas
+            ? gerarCodigoIntermediario(analise)
+            : {
+                sucesso: false,
+                analisado: false,
+                erros: [],
+                instrucoes: [],
+                codigo: '',
+                procedimentos: {},
+                declaracoes: resultadoSintatico.tabelaSintatica?.declaracoes ?? []
+            };
+
+        for (const [nome, dadosEndereco] of Object.entries(resultadoGeracao.enderecos ?? {})) {
+            if (!analise.tabelaSimbolos?.[nome]) continue;
+            analise.tabelaSimbolos[nome] = {
+                ...analise.tabelaSimbolos[nome],
+                enderecoRelativo: dadosEndereco.endereco
+            };
+        }
+
+        return {
+            ...analise,
+            sucesso: etapasAnterioresValidas && resultadoGeracao.sucesso,
+            errosGeracao: resultadoGeracao.erros,
+            resultadoGeracao,
+            codigoIntermediario: resultadoGeracao.codigo,
+            instrucoesIntermediarias: resultadoGeracao.instrucoes
         };
     }
 
